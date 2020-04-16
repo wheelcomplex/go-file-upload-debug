@@ -7,11 +7,16 @@
     <title>Http multipart upload server with go.rice</title>
   </head>
   <body>
+    <p>
+      <h1> Http multipart upload server with go.rice</h1>
+      <p></p>
+    </p>
     <form
       enctype="multipart/form-data"
       action="/upload"
       method="post"
     >
+    File comments:<input type="text" name="fileComment" />
       <input type="file" name="myFile" />
       <input type="submit" value="upload" />
     </form>

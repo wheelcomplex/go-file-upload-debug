@@ -8,6 +8,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"net/http/httputil"
 	"os"
 	"path/filepath"
 	"strings"
@@ -29,6 +30,7 @@ type srvConfig struct {
 	srvHost string
 	srvPort string
 
+	noRice        bool
 	staticBaseDir string
 	htmlroot      string
 	uploadDir     string
@@ -65,6 +67,13 @@ func init() {
 	flag.StringVar(&srvCfg.staticBaseDir, "b", defaultServerStaticBaseDir, usageServerStaticBaseDir+" (shorthand)")
 
 	const (
+		defaultRice = false
+		usageRice   = "do not use embedded html files"
+	)
+	flag.BoolVar(&srvCfg.noRice, "rice", defaultRice, usageRice)
+	flag.BoolVar(&srvCfg.noRice, "r", defaultRice, usageRice+" (shorthand)")
+
+	const (
 		defaultHelp = false
 		usageHelp   = "Listen address for server"
 	)
@@ -72,15 +81,45 @@ func init() {
 	flag.BoolVar(&srvCfg.showHelp, "h", defaultHelp, usageHelp+" (shorthand)")
 }
 
-func uploadFile(w http.ResponseWriter, r *http.Request) {
+func requestDumpBuff(w http.ResponseWriter, r *http.Request) bytes.Buffer {
+	var b bytes.Buffer // A Buffer needs no initialization.
+	fmt.Fprintf(&b, "\n")
 	a, ok := r.Context().Value(http.LocalAddrContextKey).(net.Addr)
 	if !ok {
 		// handle address not found
 		fmt.Println("Error Retrieving local address")
-		fmt.Println(ok)
-		return
+		fmt.Printf("Network(%s): %s <- %s \n", r.URL, "unknown-local-addr", r.RemoteAddr)
+
+		fmt.Fprintf(&b, "Network(%s): %s <- %s \n", r.URL, "unknown-local-addr", r.RemoteAddr)
+	} else {
+		fmt.Printf("Network(%s): %s <- %s \n", r.URL, a.String(), r.RemoteAddr)
+
+		fmt.Fprintf(&b, "Network(%s): %s <- %s \n", r.URL, a.String(), r.RemoteAddr)
 	}
-	fmt.Printf("File Upload Endpoint Hit: %s <- %s \n", a.String(), r.RemoteAddr)
+	fmt.Fprintf(&b, "<hr>")
+	fmt.Fprintf(&b, "<hr>")
+
+	// Save a copy of this request for debugging.
+	requestDump, err := httputil.DumpRequest(r, true)
+	if err != nil {
+		fmt.Fprintf(&b, "FAILED TO DUMP REQUEST: %+v\n", err)
+	} else {
+		fmt.Fprintf(&b, string(requestDump))
+	}
+
+	if b.Len() > 65535 {
+		b.Truncate(65535)
+	}
+
+	fmt.Fprintf(&b, "<hr>")
+	fmt.Fprintf(&b, "<hr>")
+
+	return b
+}
+
+func uploadFile(w http.ResponseWriter, r *http.Request) {
+	b := requestDumpBuff(w, r)
+	defer b.Reset()
 
 	// Parse our multipart form, 10 << 20 specifies a maximum
 	// upload of 10 MB files.
@@ -92,9 +131,16 @@ func uploadFile(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		fmt.Println("Error Retrieving the File")
 		fmt.Println(err)
+
+		if file == nil && handler == nil {
+			fmt.Fprintf(w, htmlMessagePage("Error Retrieving the File:"+err.Error(), "upload failed, select file to upload", text2html(b.String()), "/"))
+		} else {
+			fmt.Fprintf(w, htmlMessagePage("Error Retrieving the File:"+err.Error(), "upload failed", text2html(b.String()), "/"))
+		}
 		return
 	}
 	defer file.Close()
+
 	fmt.Printf("Uploaded File: %+v\n", handler.Filename)
 	fmt.Printf("File Size: %+v\n", handler.Size)
 	fmt.Printf("MIME Header: %+v\n", handler.Header)
@@ -104,6 +150,10 @@ func uploadFile(w http.ResponseWriter, r *http.Request) {
 	tempFile, err := ioutil.TempFile("temp-images", "upload-*.png")
 	if err != nil {
 		fmt.Println(err)
+		// return that we have successfully uploaded our file!
+		//fmt.Fprintf(w, "failed to write Uploading File: %s\n", err)
+		fmt.Fprintf(w, htmlMessagePage("write to disk failed: "+err.Error(), "upload failed", text2html(b.String()), "/"))
+		return
 	}
 	defer tempFile.Close()
 
@@ -112,58 +162,74 @@ func uploadFile(w http.ResponseWriter, r *http.Request) {
 	fileBytes, err := ioutil.ReadAll(file)
 	if err != nil {
 		fmt.Println(err)
+		fmt.Fprintf(w, htmlMessagePage("read file failed: "+err.Error(), "upload failed", text2html(b.String()), "/"))
+		return
 	}
 	// write this byte array to our temporary file
 	tempFile.Write(fileBytes)
 	// return that we have successfully uploaded our file!
-	fmt.Fprintf(w, "Successfully Uploaded File\n")
+
+	fmt.Fprintf(&b, "Uploaded File: %+v\n", handler.Filename)
+	fmt.Fprintf(&b, "File Size: %+v\n", handler.Size)
+	fmt.Fprintf(&b, "MIME Header: %+v\n", handler.Header)
+	fmt.Fprintf(&b, "<hr>")
+	fmt.Fprintf(&b, "<hr>")
+
+	fmt.Fprintf(w, htmlMessagePage("Successfully Uploaded File\n", "Uploaded", text2html(b.String()), "/"))
 }
 
 func listUploadFile(w http.ResponseWriter, r *http.Request) {
-	a, ok := r.Context().Value(http.LocalAddrContextKey).(net.Addr)
-	if !ok {
-		// handle address not found
-		fmt.Println("Error Retrieving local address")
-		fmt.Println(ok)
-		return
-	}
-	fmt.Printf("File Upload Endpoint Hit: %s <- %s \n", a.String(), r.RemoteAddr)
+	b := requestDumpBuff(w, r)
+	defer b.Reset()
 
-	// Parse our multipart form, 10 << 20 specifies a maximum
-	// upload of 10 MB files.
-	r.ParseMultipartForm(10 << 20)
-	// FormFile returns the first file for the given key `myFile`
-	// it also returns the FileHeader so we can get the Filename,
-	// the Header and the size of the file
-	file, handler, err := r.FormFile("myFile")
-	if err != nil {
-		fmt.Println("Error Retrieving the File")
-		fmt.Println(err)
-		return
-	}
-	defer file.Close()
-	fmt.Printf("Uploaded File: %+v\n", handler.Filename)
-	fmt.Printf("File Size: %+v\n", handler.Size)
-	fmt.Printf("MIME Header: %+v\n", handler.Header)
+	// fmt.Fprintf(w, "File listing for Upload no implemented\n")
+	fmt.Fprintf(w, htmlMessagePage("File listing for Upload no implemented\n", "File listing failed", text2html(b.String()), "/"))
+}
 
-	// Create a temporary file within our temp-images directory that follows
-	// a particular naming pattern
-	tempFile, err := ioutil.TempFile("temp-images", "upload-*.png")
-	if err != nil {
-		fmt.Println(err)
-	}
-	defer tempFile.Close()
+// text2html convert /r/n in strings to '<br />'
+func text2html(text string) string {
+	return strings.ReplaceAll(text, "\n", "<br />")
+}
 
-	// read all of the contents of our uploaded file into a
-	// byte array
-	fileBytes, err := ioutil.ReadAll(file)
-	if err != nil {
-		fmt.Println(err)
+// htmlMessagePage return a html page with input message/title/go back URL
+func htmlMessagePage(message, title, addon, backURL string) string {
+	if title == "" {
+		title = "backend message"
 	}
-	// write this byte array to our temporary file
-	tempFile.Write(fileBytes)
-	// return that we have successfully uploaded our file!
-	fmt.Fprintf(w, "Successfully Uploaded File\n")
+	if backURL == "" {
+		backURL = "/"
+	}
+	return `
+	<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta http-equiv="X-UA-Compatible" content="ie=edge" />
+	<title>` + title + `</title>
+  </head>
+  <body>
+    <p>
+	  <h1>` + text2html(title) + `</h1>
+	  
+	  <p>
+	  
+	<p>
+	<h2>` + text2html(message) + `</h2>
+	<p>
+    <p>
+	  <a href="` + backURL + `">Return</a>
+	  <p>
+	  <h1>DEBUG INFORMATION</h1>
+	  <hr>
+	  <h3>
+	  ` + text2html(addon) + `
+	  </h3>
+	  <hr>
+	  <p>
+  </body>
+</html>
+	`
 }
 
 // realPath returns an absolute representation of path or symbolic links.
@@ -176,11 +242,23 @@ func realPath(path string) (string, error) {
 }
 
 func setupRoutes() error {
-	htmlroot, err := rice.FindBox(srvCfg.htmlroot)
-	if err != nil {
-		return err
+	if srvCfg.noRice {
+
+		htmlroot, err := realPath(srvCfg.htmlroot + "/htmlroot")
+		if err != nil {
+			log.Fatalln(err)
+		}
+		fs := http.FileServer(http.Dir(htmlroot))
+		http.Handle("/", fs)
+	} else {
+
+		htmlroot, err := rice.FindBox("webroot/htmlroot")
+		if err != nil {
+			return err
+		}
+
+		http.Handle("/", http.FileServer(htmlroot.HTTPBox()))
 	}
-	http.Handle("/", http.FileServer(htmlroot.HTTPBox()))
 	http.HandleFunc("/upload", uploadFile)
 	http.HandleFunc("/files", listUploadFile)
 	return http.ListenAndServe(srvCfg.listenAddress, nil)
