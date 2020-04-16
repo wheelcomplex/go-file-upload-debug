@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	rice "github.com/GeertJohan/go.rice"
 )
@@ -113,6 +114,8 @@ func requestDumpBuff(w http.ResponseWriter, r *http.Request) bytes.Buffer {
 
 	fmt.Fprintf(&b, "<hr>")
 	fmt.Fprintf(&b, "<hr>")
+
+	forceNoCache(w, r)
 
 	return b
 }
@@ -240,6 +243,52 @@ func realPath(path string) (string, error) {
 	}
 	return filepath.Abs(rp)
 }
+
+// Unix epoch time
+var epoch = time.Unix(0, 0).Format(time.RFC1123)
+
+// Taken from https://github.com/mytrile/nocache
+var noCacheHeaders = map[string]string{
+	"Expires":         epoch,
+	"Cache-Control":   "no-cache, no-store, no-transform, must-revalidate, private, max-age=0",
+	"Pragma":          "no-cache",
+	"X-Accel-Expires": "0",
+}
+
+var etagHeaders = []string{
+	"ETag",
+	"If-Modified-Since",
+	"If-Match",
+	"If-None-Match",
+	"If-Range",
+	"If-Unmodified-Since",
+}
+
+// forceNoCache is a simple piece of middleware that sets a number of HTTP headers to prevent
+// a router (or subrouter) from being cached by an upstream proxy and/or client.
+//
+// As per http://wiki.nginx.org/HttpProxyModule - forceNoCache sets:
+//      Expires: Thu, 01 Jan 1970 00:00:00 UTC
+//      Cache-Control: no-cache, private, max-age=0
+//      X-Accel-Expires: 0
+//      Pragma: no-cache (for HTTP/1.0 proxies/clients)
+func forceNoCache(w http.ResponseWriter, r *http.Request) {
+
+	// Delete any ETag headers that may have been set
+	for _, v := range etagHeaders {
+		if r.Header.Get(v) != "" {
+			r.Header.Del(v)
+		}
+	}
+
+	// Set our forceNoCache headers
+	for k, v := range noCacheHeaders {
+		w.Header().Set(k, v)
+	}
+
+}
+
+//
 
 func setupRoutes() error {
 	if srvCfg.noRice {
