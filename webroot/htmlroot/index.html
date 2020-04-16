@@ -4,16 +4,18 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta http-equiv="X-UA-Compatible" content="ie=edge" />
-    <title>Document</title>
+    <title>Http multipart upload server with go.rice</title>
   </head>
   <body>
     <form
       enctype="multipart/form-data"
-      action="http://localhost:8080/upload"
+      action="/upload"
       method="post"
     >
       <input type="file" name="myFile" />
       <input type="submit" value="upload" />
     </form>
+    <p>
+      <a href="/files" target="_blank">Uploaded files</a>
   </body>
 </html>
